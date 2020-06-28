@@ -1,0 +1,904 @@
+---
+title: "the-office"
+author: "Kristen A"
+date: "4/03/2020"
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE, warning=F, message=F}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Text Analysis: 'The Office' Transcripts
+
+
+*********************************************************************************************************
+
+Load data
+```{r, warning=F, message=F}
+library(schrute)
+library(tidyverse)
+library(tidyr)
+library(tidytext)
+library(textdata)
+library(stringr)
+library(scales)
+library(RColorBrewer)
+library(extrafont)
+library(rprojroot)
+
+#needed for knitting
+mypath <- find_root_file(criterion = has_file("office_lab_workspace.RData"))
+load(file = file.path(mypath, "office_lab_workspace.RData"))
+
+mydata <- schrute::theoffice
+
+mydata$season <- as.double(mydata$season) #9 seasons total
+mydata$episode <- as.double(mydata$episode) #max 28 episodes / season
+
+#subset dataframe
+mydata <- mydata %>% 
+  select(season, episode, character, text)
+```
+
+Stop Words
+```{r, warning=F, message=F}
+stop_words <- data.frame(get_stopwords()$word)
+colnames(stop_words) <- "word"
+
+  #manually add words to stop_words list
+add_stop <- data.frame(c("like", "just", "uh", "oh", "can", "got", "um", "gonna", "actually", "okay",
+                         "yeah", "hey", "really", "pum", "pa", "rum", "ole", "la", "blub", "da", "whoa",
+                         "blah", "j", "ah", "doo", "dot", "na", "dah", "bum", "right", "now", "ha", "wait", "s", "x", "beep", "yes"))
+colnames(add_stop) <- "word"
+  #and expanded stop_words list from Prof. Mattew L. Jockers
+source("/Users/kristenakey/Desktop/R/functions/expanded_stop_words.R")
+stop_words <- rbind(stop_words, add_stop, more_stop_words)
+```
+*********************************************************************************************************
+
+## Word Frequencies
+
+### Comparing 'The Office' transcripts by each season
+
+
+'Bag of Words' - seasons
+```{r, warning=F, message=F}
+#line numbers for season
+office_seasons <- mydata %>%
+  group_by(season, episode) %>%
+  mutate(linenumber = row_number()) %>%
+  ungroup() 
+
+#tokenize and remove stop words
+tidy_office_seasons <- office_seasons %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by="word")
+
+#stemming
+library(SnowballC)
+tidy_office_seasons <- tidy_office_seasons %>%
+  mutate(word = wordStem(word)) 
+
+#make df of each individual season for later
+tidy_office_seasons_list <- split(tidy_office_seasons, tidy_office_seasons$season)
+list2env(setNames(tidy_office_seasons_list,paste0("season", seq_along(tidy_office_seasons_list))), envir = parent.frame()) 
+```
+
+
+```{r}
+#Most common words used in The Office
+tidy_office_char %>%
+  count(word, sort=T) %>%
+  head(10)
+
+
+tidy_office_char%>%
+  count(word, sort = TRUE) %>%
+  filter(n > 1000) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  ggtitle("Most Used Words in 'The Office'") +
+  theme(text=element_text(family="ATypewriterForMe")) + theme(legend.position = "none")
+
+ggsave(plot = last_plot(), filename = "words-top.png", dpi = 300, width = 8, height = 5)
+```
+
+
+```{r, warning=F, message=F}
+#Count - find the most common words in each season
+freqs <- bind_rows(mutate(season2, season = "season 2"),
+                  mutate(season3, season = "season 3"), 
+                  mutate(season8, season = "season 8"),
+                  mutate(season9, season = "season 9"),
+                  mutate(season1, season = "season 1")) %>% 
+  #only words
+  mutate(word = str_extract(word, "[a-z']+")) %>% 
+  count(season, word) %>%
+  group_by(season) %>%
+  mutate(proportion = n / sum(n)) %>%
+  select(-n) %>%
+  spread(season, proportion) %>%
+  gather(season, proportion,`season 2`:`season 9`) 
+
+
+#Plot -- comparing words used in Season 1 to season 2, 3, 8, and 9
+ggplot(freqs, aes(proportion, `season 1`, color = abs(`season 1` - proportion))) + 
+  geom_abline(color = "gray40", lty = 2) +
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3) +
+  geom_text(aes(label = word), check_overlap = T, vjust = 1.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_color_gradient(limits = c(0, 0.001), low = "darkslategray4", high = "gray75") +
+  facet_wrap(~season, ncol=2) +
+  theme(legend.position = "none") +
+  labs(y = "Season 1", x = NULL) +
+  ggtitle("Comparing Word Frequencies Among Seasons of 'The Office'") +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) + theme(legend.position = "none")
+
+ggsave(plot = last_plot(), filename = "freq-seasons.png", dpi = 300, width = 8, height = 5)
+```
+
+
+Words close to the line are similar in both seasons; words above/to the left of the line more often appear in season 1 than the respective season. For example, "Michael" appears more often in season 1 than in seasons 8 and 9. This makes sense as Michael leaves the show in season 7. Overall though, there is not a large number of words unique to season 1 compared to the seasons shown here, as the absolute distance from the line is not large and there are few unique words that stick out. This is logical as it would be difficult to imagine the language of the tevelvision series' seasons changing greatly season to season.
+
+
+```{r}
+cor.test(data = freqs[freqs$season == "season 2",],
+         ~ proportion + `season 1`)
+```
+
+```{r}
+cor.test(data = freqs[freqs$season == "season 9",],
+         ~ proportion + `season 1`)
+```
+
+
+These correlation tests show that when comparing word frequencies between seasons, season 2 is slightly more correlated to season 1 than the final season, season 9. But overall, both seasons are highly correlated.
+
+*********************************************************************************************************
+### Comparing 'The Office' transcripts by characters
+
+'Bag of Words' - characters
+```{r, warning=F, messsage=F}
+#subset dataframe
+office_seasons <- mydata %>%
+  group_by(season, episode, character) %>%
+  mutate(linenumber = row_number()) %>%
+  ungroup() 
+
+#tokenize and remove stop words
+tidy_office_seasons <- office_seasons %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by="word")
+
+#stemming
+tidy_office_seasons <- tidy_office_seasons %>%
+  mutate(word = wordStem(word)) 
+
+#characters with most lines
+top_char <- tidy_office_seasons %>%
+  count(linenumber, character) %>%
+  group_by(character) %>%
+  mutate(tot_lines = sum(n)) %>%
+  distinct(character, .keep_all = T) %>%
+  arrange(desc(tot_lines)) %>%
+  select(-c(linenumber, n)) %>%
+  filter(tot_lines > 2000)
+
+tidy_office_char <- tidy_office_seasons %>%
+  filter(character %in% top_char$character) %>%
+  filter(word != "") 
+
+
+#make df of each individual character
+tidy_office_seasons_list <- split(tidy_office_char, tidy_office_char$character)
+list2env(setNames(tidy_office_seasons_list,sort(unique(tidy_office_char$character))), envir = parent.frame())
+```
+
+
+```{r}
+#Most common words used by each main charachter in The Office
+tidy_office_char %>%
+  count(word,character) %>%
+  arrange(character, desc(n)) %>%
+  group_by(character) %>%
+  top_n(10) 
+
+top_char6 <- top_char %>% head(6)
+
+tidy_office_char %>%
+  count(word,character) %>%
+  arrange(character, desc(n)) %>%
+  filter(character %in% top_char6$character) %>%
+  group_by(character) %>%
+  top_n(5) %>%
+    ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill=word)) +
+    geom_col() +
+    facet_wrap(~character, scales = "free_y") +
+    xlab(NULL) +
+    coord_flip() +
+  ggtitle("Top 5 Most Used Words by Main Characters in 'The Office'") +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) 
+
+ggsave(plot = last_plot(), filename = "top-words-char.png", dpi = 300, width = 8, height = 5)
+```
+
+
+Analyzing word frequencies by character shows many of the characters use the same words frequently. For example, the plot above shows the top 5 most commonly used words by 6 of the most main characters in the series. There is large overlap, with "go", "know", and "well" being some of the most popular.  
+
+
+
+```{r, warning=F, messsage=F}
+#Count - find the most common words
+freqs <- bind_rows(mutate(Angela, character = "Angela"),
+                  mutate(Dwight, character = "Dwight"), 
+                  mutate(Jim, character = "Jim"),
+                  mutate(Pam, character = "Pam"),
+                  mutate(Michael, character = "Michael")) %>% 
+  #only words
+  mutate(word = str_extract(word, "[a-z']+")) %>% 
+  count(word, character) %>%
+  group_by(character) %>%
+  mutate(proportion = n / sum(n)) %>%
+  select(-n) %>%
+  spread(character, proportion) %>%
+  select(word, Michael, Angela, Dwight, Jim, Pam) %>%
+  gather(character, proportion,`Angela`:`Pam`) 
+
+
+#Plot Count
+ggplot(freqs, aes(proportion, `Michael`, color = abs(`Michael` - proportion))) + 
+  geom_abline(color = "gray40", lty = 2) +
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3) +
+  geom_text(aes(label = word), check_overlap = T, vjust = 1.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_color_gradient(limits = c(0, 0.001), low = "darkslategray4", high = "gray75") +
+  facet_wrap(~character, ncol=2) +
+  theme(legend.position = "none") +
+  labs(y = "Michael", x = NULL)  +
+  ggtitle("Comparing Word Frequencies Among Characters of 'The Office'") +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) + theme(legend.position = "none")
+  
+ggsave(plot = last_plot(), filename = "freq-comparison.png", dpi = 300, width = 8, height = 5)
+```
+
+
+This plot compares the word frequencies of Michael, the show's lead character for several seasons and boss of Dunder Mifflin, to other main characters of the show. Some words that are more commonly spoken by Angela, for example, than Michael are "cat", "senate", and "phillip." If you have ever seen the show, you would know that Angela is a cat-lover, her last name is Phillips, and later in the series marries a state senator. For Pam, words like "Cece", "art", "gosh", and "Michael" appear, suggesting she says these words at a greater rate than Michael. 
+
+
+Correlation test by characters' word frequencies
+```{r}
+cor.test(data = freqs[freqs$character == "Angela",],
+         ~ proportion + `Michael`)
+```
+
+```{r}
+cor.test(data = freqs[freqs$character == "Jim",],
+         ~ proportion + `Michael`)
+```
+
+
+Interestingly, the words most commonly used by Jim are more correlated by those used by Michael, compared to Angela. This may be because Jim works more closely with Michael and Angela overall is a stubborn and difficult character. Yet, both characters have an overall high correlation, which may be because they all work in the same office and therefore use similar language. 
+
+
+
+*********************************************************************************************************
+
+
+##Correlation Tests
+
+**Pearson Correlation**
+
+Word correlation between main characters of the series
+```{r, warning=F, messsage=F}
+suppressMessages(library(tm))
+
+## count each word per character 
+oc = tidy_office_char[,c("character","word")]
+d=  count_(oc, c("character", "word"))
+
+# make a document term matrix 
+pwdtm = d %>%
+  cast_dtm(character, word, n)
+
+# make the dtm into a dataframe 
+mpwdtm=as.matrix(pwdtm)
+df.mpwdtm=as.data.frame(mpwdtm)
+
+# make the dtm into a tdm instead #
+t.t = t(mpwdtm)
+
+cor(t.t)
+
+
+corrplot::corrplot(cor(t.t), method = "circle",order="FPC",type="upper",diag = F,
+           tl.col="black", col = brewer.pal(12, "Paired"), tl.srt=50,insig = "blank",
+           addshade="positive", tl.cex=.5, cl.lim = c(0, 1))
+mtext("Word Correlation Between 
+           Main Characters in 'The Office'", at=3.5, line=-13.5, cex=1, family="ATypewriterForMe")
+
+ggsave(plot = last_plot(), filename = "word-char_main-corr.png", dpi = 300, width = 8, height = 5)
+```
+
+This correlation test and matrix show that among the most common characters in the show, there is a strong correlation between many of the characters and the words they use. The majority of the characters' language is correlated 67+%. With many of the characters who work at Dunder Mifflin correlating at 83+%. This is interesting as it suggests those who work together also use similar words.
+
+***********************************************************************************************************************************************
+
+Word correlation between main and sub-main characters of the series
+```{r}
+med_char <- tidy_office_seasons %>%
+  count(linenumber, character) %>%
+  group_by(character) %>%
+  mutate(tot_lines = sum(n)) %>%
+  distinct(character, .keep_all = T) %>%
+  arrange(desc(tot_lines)) %>%
+  select(-c(linenumber, n)) %>%
+  filter(tot_lines < 2000, tot_lines > 500)
+
+toptop_char <- top_char %>% head(10)
+
+topmed_char <- rbind(toptop_char, med_char)
+
+
+# count each word per character 
+oc2 = tidy_office_seasons[,c("character","word")]
+oc2 = oc2[oc2$character %in% topmed_char$character,]
+d2=  count_(oc2, c("character", "word"))
+
+# make a document term matrix 
+pwdtm2 = d2 %>%
+  cast_dtm(character, word, n)
+
+# make the dtm into a dataframe 
+mpwdtm2=as.matrix(pwdtm2)
+df.mpwdtm2=as.data.frame(mpwdtm2)
+
+# make the dtm into a tdm instead 
+t.t2 = t(df.mpwdtm2)
+
+cor(t.t2)
+
+corrplot::corrplot(cor(t.t2), method="circle",order="FPC",type="upper",diag = F,
+           tl.col="black", tl.srt=50,insig = "blank", col = brewer.pal(12, "Paired"), tl.cex=.5, cl.lim = c(0, 1))
+mtext("Word Correlation Between Main and 
+      Sub-main Characters in 'The Office'", at=4.5, line=-15.5, cex=1, family="ATypewriterForMe")
+
+ggsave(plot = last_plot(), filename = "word-char-corr.png", dpi = 300, width = 8, height = 5)
+```
+
+
+This correlation matrix, in contrast to the previous matrix, shows that characters who are featured less are also less strongly correlated to other characters.  
+
+
+************************************************************************************************************************
+
+**Cosine Similarity**
+```{r}
+library(lsa)
+head(lsa::cosine(t.t))
+```
+
+
+************************************************************************************************
+
+**Pairwise Correlation**
+```{r, warning=F, messsage=F}
+library(widyr)
+
+#Counting and correlating among sections
+office_section_words <- mydata %>%
+  mutate(section = row_number() %/% 10) %>%
+  filter(section > 0) %>%
+  unnest_tokens(word, text) %>%
+  filter(!word %in% stop_words$word)
+  
+
+###  Pairwise correlation
+word_cors <- office_section_words %>%
+  group_by(word) %>%
+  # filter for at least relatively common words first
+  filter(n() >= 20) %>%
+  pairwise_cor(word, section, sort = TRUE)
+
+
+#Words most associated with "dwight", "pam", "kevin", "dunder" 
+word_cors %>%
+  filter(item1 %in% c("dwight", "pam", "kevin", "dunder")) %>%
+  group_by(item1) %>%
+  top_n(6) %>%
+  ungroup() %>%
+  mutate(item2 = reorder(item2, correlation)) %>%
+  ggplot(aes(item2, correlation, fill=item1)) +
+  geom_bar(stat = "identity", show.legend = F) +
+  facet_wrap(~ item1, scales = "free") +
+  coord_flip() +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) + theme(legend.position = "none")
+
+ggsave(plot = last_plot(), filename = "word-char-association.png", dpi = 300, width = 8, height = 5)
+```
+
+
+"Mifflin" is most associated with "Dunder," "Schrute" is most correlated with "Dwight," "Oscar" is most connected to "Kevin," and "Jim"" is most associated with "Pam." If you have ever watched a season or two of the series, these correlations fit in line with the series' storylines and themes. 
+
+
+
+************************************************************************************************
+
+Pairs of words in The Office that show at least a .15 correlation of appearing within the same section.
+```{r, warning=F, messsage=F}
+suppressMessages(library(igraph))
+library(ggraph)
+set.seed(9)
+
+word_cors %>%
+  filter(correlation > .35) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) + theme(legend.position = "none")
+
+ggsave(plot = last_plot(), filename = "pair-corr.png", dpi = 300, width = 8, height = 5)
+```
+
+************************************************************************************************
+
+**Bigram Corrleations**
+```{r, warning=F, messsage=F}
+office_bigrams <- mydata %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+#Filtering stop_words
+bigrams_separated <- office_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+#Reunite to find the most common bigrams not containing stop-words
+bigrams_united <- bigrams_filtered %>%
+  unite(bigram, word1, word2, sep = " ")
+
+#Look at tf-idf of bigrams by characters 
+bigram_tf_idf <- bigrams_united %>%
+  count(character, bigram) %>%
+  bind_tf_idf(bigram, character, n) %>%
+  arrange(desc(tf_idf))
+
+top_char4 <- top_char %>% head(4)
+
+bigram_tf_idf %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(bigram = factor(bigram, levels = rev(unique(bigram)))) %>% 
+  filter(character %in% top_char4$character) %>%
+  group_by(character) %>% 
+  top_n(6) %>% 
+  ungroup() %>%
+  ggplot(aes(bigram, tf_idf, fill = character)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "tf-idf") +
+  facet_wrap(~character, ncol = 2, scales = "free") +
+  coord_flip() +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) + theme(legend.position = "none")
+
+ggsave(plot = last_plot(), filename = "bigram-corr.png", dpi = 300, width = 8, height = 5)
+```
+
+
+
+
+## Sentiment Analysis
+```{r, warning=F, messsage=F}
+#df of each nrc sentiment for analysis
+nrc_sentiments_list <- split(get_sentiments("nrc"), get_sentiments("nrc")$sentiment)
+list2env(setNames(nrc_sentiments_list,paste0("nrc_", unique(get_sentiments("nrc")$sentiment))), envir = parent.frame()) 
+
+
+###Count - most common words by sentiment for each character
+
+#Joy -- overall
+tidy_office_char%>%
+  inner_join(nrc_joy, by="word") %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 50) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) +
+  geom_col(fill="#DEBB00") +
+  xlab(NULL) +
+  coord_flip() +
+  theme_classic() +
+  ggtitle("Most Common Joyful Words Used in 'The Office'") +
+  theme(text=element_text(family="ATypewriterForMe")) + theme(legend.position = "none")
+
+ggsave(plot = last_plot(), filename = "joy-top.png", dpi = 300, width = 8, height = 5)
+```
+
+
+```{r, warning=F, messsage=F}
+top_char5 <- top_char %>% head(5)
+
+#Joy by top 5 main characters
+tidy_office_char %>%
+  inner_join(nrc_joy, by="word") %>%
+  count(word, character, sort = TRUE) %>%
+  filter(character %in% top_char5$character) %>%
+  group_by(character) %>%
+  top_n(n, n=5) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill=word)) +
+    geom_col() +
+    facet_wrap(~character, scales = "free_y") +
+    xlab(NULL) +
+    coord_flip() +
+  ggtitle("Top 5 Most Used Joyful Words by Main Characters in 'The Office'") +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) 
+
+ggsave(plot = last_plot(), filename = "joy-char.png", dpi = 300, width = 8, height = 5)
+```
+
+
+**Negative**
+```{r, warning=F, messsage=F}
+#Negative - overall
+tidy_office_char%>%
+  inner_join(nrc_negative, by="word") %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 50) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) +
+  geom_col(fill="#671E1B") +
+  xlab(NULL) +
+  coord_flip() +
+  ggtitle("Most Common Negative Words Used in 'The Office'") +
+  theme(text=element_text(family="ATypewriterForMe")) + theme(legend.position = "none")
+
+ggsave(plot = last_plot(), filename = "neg-words.png", dpi = 300, width = 8, height = 5)
+```
+
+
+```{r, warning=F, messsage=F}
+##Most common positive and negative words using "BING"
+bing_word_counts <- tidy_office_char %>%
+  inner_join(get_sentiments("bing"), by="word") %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  scale_fill_manual(values=c("#671E1B", "#DEBB00")) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip() +
+  theme(text=element_text(family="ATypewriterForMe")) + theme(legend.position = "none")
+
+ggsave(plot = last_plot(), filename = "pos-neg-words.png", dpi = 300, width = 8, height = 5)
+```
+
+************************************************************************************************
+
+**Examine how sentiment changes throughout a season.**
+```{r, warning=F, message=F}
+#subset dataframe
+office_seasons <- mydata %>%
+  group_by(season, episode) %>%
+  mutate(linenumber = row_number()) %>%
+  ungroup() 
+
+#tokenize and remove stop words
+tidy_office_seasons <- office_seasons %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by="word") %>%
+  mutate(word = wordStem(word)) 
+
+
+####Examine how sentiment changes throughout a season
+office_sentiment <- tidy_office_seasons %>%
+  inner_join(get_sentiments("bing"), by="word") %>%
+  count(word, season, episode, index = linenumber %/% 15, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative,
+         sent_col = ifelse(sentiment<0, FALSE, TRUE))
+
+
+ggplot(office_sentiment, aes(index, sentiment,  fill=sent_col)) + 
+  scale_fill_manual(values=c("#671E1B", "#DEBB00")) +
+  geom_hline(yintercept=0, color="lightgray")+
+  geom_col(show.legend = F) +
+  facet_wrap(~season, ncol = 5, scales = "free_x") +
+  ggtitle("Sentiment through the seasons of The Office") +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) +
+  theme(plot.title = element_text(size=17)) +
+  ylab("Sentiment") + xlab("Index") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+ggsave(plot = last_plot(), filename = "seasons-sent1.png", dpi = 300, width = 8, height = 5)
+```
+
+
+Seasons 1 was the most 'neutral' season of 'The Office,' with all other seasons showing much more emotion. Towards the end of each season, the words used become more neutral than the words at the beginning of seasons. 
+
+
+**Another plot showing sentiment throughout the seasons of The Office.**
+```{r}
+####Examine how sentiment changes throughout the series
+office_sentiment2 <- tidy_office_seasons %>%
+  inner_join(get_sentiments("bing"), by="word") %>%
+  arrange(season) %>%
+  count(word, index = linenumber %/% 5, sentiment, season) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative) %>%
+  mutate(season = factor(season), 
+         season = factor(season, levels = rev(levels(season))))
+
+ggplot(office_sentiment2, aes(index, sentiment, fill=season)) +
+  geom_hline(yintercept=0, color="lightgray")+
+  geom_col(show.legend = T) +
+  ggtitle("Sentiment through the seasons of The Office") +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) +
+  theme(plot.title = element_text(size=17)) +
+  ylab("Sentiment") + xlab("Index") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  scale_fill_discrete(name="Season") + 
+  guides(fill=guide_legend(ncol=5, reverse=T)) +
+  theme(legend.position = c(.77,.12))
+
+ggsave(plot = last_plot(), filename = "seasons-sent.png", dpi = 300, width = 8, height = 5)
+```
+
+*******************************************************************************************
+
+**Sentence-level sentiment analysis**
+```{r}
+office_sentences <- mydata %>%
+  unnest_tokens(sentence, text, token = "sentences")
+
+season_sent <- office_sentences %>%
+  group_by(season) %>%
+  mutate(sentence_num = 1:n(),
+         index = round(sentence_num / n(), 2)) %>%
+  unnest_tokens(word, sentence) %>%
+  inner_join(get_sentiments("afinn"), by="word") %>%
+  group_by(season, index) %>%
+  summarise(sentiment = sum(value, na.rm = TRUE)) %>%
+  arrange(desc(sentiment))
+
+ggplot(season_sent, aes(index, factor(season, levels = sort(unique(season), decreasing = TRUE)), fill = sentiment)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2() +
+  scale_x_continuous(labels = scales::percent, expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  labs(x = "Season Progression", y = "Season") +
+  ggtitle("Sentiment of 'The Office'",
+  subtitle = "Summary of the net sentiment score as the show progresses through each season") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "top") +
+    theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe"))
+
+ggsave(plot = last_plot(), filename = "sentence-sent.png", dpi = 300, width = 8, height = 5)
+```
+
+
+At the sentence-level, one can see 'The Office' is overall a very positive show.
+
+
+## Negation Analaysis
+```{r}
+#Examine the most frequent words that were preceded by “not” and were associated with a sentiment.
+AFINN <- get_sentiments("afinn")
+
+not_words <- bigrams_separated %>%
+  filter(word1 == "not") %>%
+  inner_join(AFINN, by = c(word2 = "word")) %>%
+  count(word2, value, sort = TRUE)
+
+#Compute which words contributed the most in the “wrong” direction
+not_words %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  head(20) %>%
+  mutate(word2 = reorder(word2, contribution)) %>%
+  ggplot(aes(word2, n * value, fill = n * value > 0)) +
+  scale_fill_manual(values=c("#671E1B", "#DEBB00")) +
+  geom_col(show.legend = FALSE) +
+  xlab("Words preceded by \"not\"") +
+  ylab("Sentiment value * number of occurrences") +
+  coord_flip() +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe")) +
+  ggtitle("Words that contributed most to the 'wrong' direction of sentiment analysis") +
+  theme(plot.title = element_text(size=12, hjust = 1.2, vjust=2.12)) 
+
+ggsave(plot = last_plot(), filename = "contrib_neg.png", dpi = 300, width = 8, height = 5)
+```
+
+
+Many words such as "like," "good," and "funny"-- which are positive on their own-- are actually preceded by "not," making them negative. Yellow in this plot are words classified as positive on their own, that with "not," should be negative. The reverse is true for the red.
+
+
+
+```{r}
+#Looking at most common words that appear with these negation terms
+negation_words <- c("not", "no", "never", "without", "nothing", "none", "neither")
+
+negated_words <- bigrams_separated %>%
+  filter(word1 %in% negation_words) %>%
+  inner_join(AFINN, by = c(word2 = "word")) %>%
+  count(word1, word2, value, sort = TRUE)
+
+
+#most common positive or negative words to follow negations such as ‘no’ and ‘not’
+negated_words %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  head(20) %>%
+  mutate(word2 = reorder(word2, contribution)) %>%
+  ggplot(aes(word2, n * value, fill = n * value > 0)) +
+  scale_fill_manual(values=c("#671E1B", "#DEBB00")) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~word1, ncol = 2, scales = "free") +
+  xlab("Words preceded by \"not\"") +
+  ylab("Sentiment value * number of occurrences") +
+  coord_flip() +
+  theme_classic() +
+  theme(text=element_text(family="ATypewriterForMe"))
+
+ggsave(plot = last_plot(), filename = "common-negations.png", dpi = 300, width = 8, height = 5)
+```
+
+
+
+## Clustering
+
+Analyzing networks of characters in 'The Office'
+```{r, warning=F, message=F}
+#http://varianceexplained.org/r/love-actually-network/ 
+
+#add line count
+mydata_lines <- mydata %>%
+  filter(season ==  2) %>% 
+  group_by(episode, line = cumsum(!is.na(character))) %>%
+  summarize(character = character[1], dialogue = str_c(text, collapse = " "))
+
+#calculates number of lines of each character in every episode
+by_speaker_season <- mydata_lines %>%
+  count(character)
+
+#select most common appearing characters for seasons with many
+by_speaker_season %>%
+  group_by(character) %>%
+  mutate(tot = sum(n)) %>%
+  distinct(character, .keep_all=T) %>%
+  arrange(desc(tot)) %>%
+  ungroup(character) %>%
+  top_n(30) %>%
+  select(character) -> top_char
+
+by_speaker_season %>% inner_join(top_char) -> by_speaker_season
+
+suppressMessages(library(reshape2))
+speaker_season_matrix <- by_speaker_season %>%
+  acast(character ~ episode, fun.aggregate = length)
+
+#Hierarchical clustering
+norm <- speaker_season_matrix / rowSums(speaker_season_matrix)
+h <- hclust(dist(norm, method = "manhattan"))
+tiff('clustering.tiff', units="in", width=7, height=5, res=300)
+plot(h)
+dev.off()
+
+
+#Visualize a timeline of all episodes
+ordering <- h$labels[h$order]
+
+epsidoes <- by_speaker_season %>%
+  filter(n() > 1) %>%        # episode with > 1 character
+  ungroup() %>%
+  mutate(episode = as.numeric(factor(episode)),
+         character = factor(character, levels = ordering))
+
+ggplot(epsidoes, aes(episode, character)) +
+  geom_point() +
+  geom_path(aes(group = episode))
+ggsave(plot = last_plot(), filename = "point-relationship.png", dpi = 300, width = 8, height = 5)
+
+#Heatmap
+s <- speaker_season_matrix[, colSums(speaker_season_matrix)]
+cooccur <- speaker_season_matrix %*% t(speaker_season_matrix)
+
+#color for heatmap
+heat <- colorRampPalette(hcl.colors(11, "heat2"))(100)
+tiff('heatmap.tiff', units="in", width=7, height=5, res=300)
+heatmap(cooccur, col=heat)
+dev.off()
+
+g <- graph.adjacency(cooccur, weighted = TRUE, mode = "undirected", diag = FALSE)
+tiff('adj.tiff', units="in", width=7, height=5, res=300)
+plot(g, edge.width = E(g)$weight)
+dev.off()
+```
+
+
+Members of Dunder Mifflin--Stanley, Kelly, Kevin, Angela, Ryan, Pam, Michael, Dwight, and Jim--are all clustered together. 
+
+
+## Wordclouds
+```{r, warning=F, message=F}
+library(wordcloud)
+`%notin%` <- Negate(`%in%`)
+
+set.seed(9)
+
+tiff('wordcloud.png', units="in", width=7, height=5, res=300)
+tidy_office_char %>%
+  anti_join(stop_words, by="word") %>%
+  filter(word %notin% c("go", "know", "think", "get", "come", "well", "want", "right", "good", "u")) %>%
+  count(word) %>%
+  with(wordcloud(word,n, max.words = 40, family="ATypewriterForMe")) 
+dev.off()
+```
+
+Jim and Pam Wordcloud
+```{r, message=F, warning=F}
+sub<- tidy_office_char %>%
+  filter(character==c("Jim", "Pam")) %>%
+  pivot_longer(cols= character) %>%
+  count(word, value)
+
+library(reshape2)
+mat<-acast(sub, word~value, value.var='n', fill=0)
+tiff('j_p-wordcloud.png', units="in", width=7, height=5, res=300)
+comparison.cloud(mat, colors=c('brown', 'purple'), family="ATypewriterForMe", font= 6, title.size=2.5)
+dev.off()
+```
+
+Michael and Dwight Wordcloud
+```{r,  message=F, warning=F}
+sub2<- tidy_office_char %>%
+  filter(character==c("Michael", "Dwight")) %>%
+  pivot_longer(cols= character) %>%
+  count(word, value) %>%
+  filter(word %notin% c("go", "know", "think", "get", "come", "well", "want", "right", "good", "u"))
+
+mat2<-acast(sub2, word~value, value.var='n', fill=0)
+tiff('m_d-wordcloud.png', units="in", width=7, height=5, res=300)
+comparison.cloud(mat2, colors=c('blue', 'darkorange4'), family="ATypewriterForMe", font= 6)
+dev.off()
+```
+
+
+
+
+
+
+
+
